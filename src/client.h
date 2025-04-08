@@ -1,26 +1,16 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
+// Configuration structure for the entire client
 typedef struct {
-    char transport[8];
-    char server[256];
-    int port;
-    int timeout_ms;   // (UDP) milisekundy
-    int max_retries;  // (UDP) kolikrat zkusim znovu
+    char transport[8];               // "tcp" or "udp"
+    char server[256];                // Server address or hostname
+    int  port;                       // Server port
+    int  udp_confirm_timeout_ms;     // UDP confirmation timeout (ms)
+    int  udp_max_retries;            // UDP max retransmissions
 } client_config_t;
 
-// Stavová struktura klienta
-typedef enum {
-    ST_CLOSED,
-    ST_AUTH,
-    ST_OPEN,
-    ST_END
-} client_state_e;
-
-// Protokol upřesněn jinde, ale můžeme držet i tady
-// např. definice stránek, do kterých si pamatuji username, displayname atd.
-
-int run_client_tcp(const client_config_t *cfg);
-int run_client_udp(const client_config_t *cfg);
+// The unified entry point that decides whether to run TCP or UDP
+int client_run(client_config_t *cfg);
 
 #endif // CLIENT_H

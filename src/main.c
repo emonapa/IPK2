@@ -3,52 +3,56 @@
 #include <string.h>
 #include "client.h"
 
-#define TIMEOUT 250
-#define MAX_RETRIES 3
-#define PORT 4567
+#define DEFAULT_PORT 4567
+#define DEFAULT_UDP_TIMEOUT 250 // ms
+#define DEFAULT_UDP_RETRIES 3
 
-static void print_help(void) {
-    printf("Usage: ipk25chat-client -t [tcp|udp] -s server -p port -d timeout -r retries\n");
-    exit(0);
+void print_usage()
+{
+    fprintf(stderr, "Usage: ipk25chat-client [OPTIONS]\n");
+    fprintf(stderr, "  -t <tcp|udp>        Transport protocol (required)\n");
+    fprintf(stderr, "  -s <server>         Server IP or hostname (required)\n");
+    fprintf(stderr, "  -p <port>           Server port (default: 4567)\n");
+    fprintf(stderr, "  -d <timeout_ms>     UDP confirmation timeout in ms (default: 250)\n");
+    fprintf(stderr, "  -r <retries>        UDP max retries (default: 3)\n");
+    fprintf(stderr, "  -h                  Print this help\n");
 }
 
-int main(int argc, char *argv[]) {
-    client_config_t config;
-    // Default values
-    memset(&config, 0, sizeof(config));
-    config.port = PORT;       // default
-    config.timeout_ms = TIMEOUT; // default
-    config.max_retries = MAX_RETRIES; // default
+int main(int argc, char *argv[])
+{
+    // Default config
+    client_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.port = DEFAULT_PORT;
+    cfg.udp_confirm_timeout_ms = DEFAULT_UDP_TIMEOUT;
+    cfg.udp_max_retries = DEFAULT_UDP_RETRIES;
 
-    // PARSE ARGS
+    // Parse arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0) {
-            print_help();
-        } else if (strcmp(argv[i], "-t") == 0 && i+1 < argc) {
-            strncpy(config.transport, argv[++i], sizeof(config.transport));
-        } else if (strcmp(argv[i], "-s") == 0 && i+1 < argc) {
-            strncpy(config.server, argv[++i], sizeof(config.server));
-        } else if (strcmp(argv[i], "-p") == 0 && i+1 < argc) {
-            config.port = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "-d") == 0 && i+1 < argc) {
-            config.timeout_ms = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "-r") == 0 && i+1 < argc) {
-            config.max_retries = atoi(argv[++i]);
+            print_usage();
+            return 0;
+        } else if (strcmp(argv[i], "-t") == 0 && (i+1 < argc)) {
+            strncpy(cfg.transport, argv[++i], sizeof(cfg.transport)-1);
+        } else if (strcmp(argv[i], "-s") == 0 && (i+1 < argc)) {
+            strncpy(cfg.server, argv[++i], sizeof(cfg.server)-1);
+        } else if (strcmp(argv[i], "-p") == 0 && (i+1 < argc)) {
+            cfg.port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "-d") == 0 && (i+1 < argc)) {
+            cfg.udp_confirm_timeout_ms = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "-r") == 0 && (i+1 < argc)) {
+            cfg.udp_max_retries = atoi(argv[++i]);
+        } else {
+            fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+            return 1;
         }
     }
 
-    if (strlen(config.transport) == 0 || strlen(config.server) == 0) {
-        fprintf(stderr, "Missing required arguments!\n");
+    // Check mandatory args
+    if (strlen(cfg.transport) == 0 || strlen(cfg.server) == 0) {
+        fprintf(stderr, "Error: -t and -s are required.\n");
         return 1;
     }
 
-    // RUN CLIENT
-    int ret = 0;
-    if (strcmp(config.transport, "tcp") == 0) {
-        ret = run_client_tcp(&config);
-    } else {
-        ret = run_client_udp(&config);
-    }
-
-    return ret;
+    return client_run(&cfg);
 }
