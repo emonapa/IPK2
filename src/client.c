@@ -6,13 +6,12 @@
 
 
 // The main client_run function decides which variant to start
-int client_run(client_config_t *cfg)
-{
+int client_run(client_config_t *cfg) {
     if (strcmp(cfg->transport, "tcp") == 0) {
         return tcp_run(cfg);
     } else if (strcmp(cfg->transport, "udp") == 0) {
-        //return udp_run(cfg);
-        return 1; // Placeholder for UDP implementation
+        udp_run(cfg);
+        return 0;
     } else {
         fprintf(stderr, "Unsupported transport: %s\n", cfg->transport);
         return 1;

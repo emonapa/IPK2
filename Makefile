@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -O2
-LDLIBS =
+CFLAGS = -Wall -Wextra -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -DDEBUG_PRINT
+LDLIBS = 
 TARGET = ipk25chat-client
 
 SRCDIR = src
@@ -10,6 +10,7 @@ SOURCES = \
   $(SRCDIR)/client.c \
   $(SRCDIR)/tcp.c \
   $(SRCDIR)/udp.c \
+  $(SRCDIR)/utils.c \
 
 OBJECTS = $(SOURCES:.c=.o)
 
