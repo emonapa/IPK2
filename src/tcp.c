@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <poll.h>
 #include "tcp.h"
+#include "utils.h"  // for resolve_hostname_ipv4
 
 // Simple client states
 typedef enum {
@@ -241,15 +242,18 @@ int tcp_run(const client_config_t *cfg)
         perror("socket");
         return 1;
     }
+
     struct sockaddr_in srv;
     memset(&srv, 0, sizeof(srv));
     srv.sin_family = AF_INET;
     srv.sin_port = htons(cfg->port);
-    if (inet_pton(AF_INET, cfg->server, &srv.sin_addr) <= 0) {
-        fprintf(stderr, "Invalid server address.\n");
+
+    if (!resolve_server_address(cfg->server, cfg->port, &srv)) {
+        fprintf(stderr, "Failed to resolve server address: %s\n", cfg->server);
         close(g_tcp.sock);
         return 1;
     }
+
     if (connect(g_tcp.sock, (struct sockaddr*)&srv, sizeof(srv)) < 0) {
         perror("connect");
         close(g_tcp.sock);

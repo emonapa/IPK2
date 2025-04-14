@@ -3,6 +3,34 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <netdb.h>
+
+int resolve_server_address(const char *host, uint16_t port, struct sockaddr_in *out_addr) {
+    struct addrinfo hints, *res;
+    char port_str[6];
+    snprintf(port_str, sizeof(port_str), "%u", port);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; // IPv4
+    hints.ai_socktype = SOCK_DGRAM;
+
+    int err = getaddrinfo(host, port_str, &hints, &res);
+    if (err != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
+        return -1;
+    }
+
+    if (res == NULL) {
+        fprintf(stderr, "No address info found for %s\n", host);
+        return -1;
+    }
+
+    struct sockaddr_in *addr_in = (struct sockaddr_in *)res->ai_addr;
+    memcpy(out_addr, addr_in, sizeof(struct sockaddr_in));
+    freeaddrinfo(res);
+    return 0;
+}
+
 
 
 void msgid_buffer_init(msgid_buffer_t *buf) {
@@ -37,12 +65,18 @@ void udp_print_packet(const uint8_t *buf, size_t len) {
         printf("Invalid packet (too short)\n");
         return;
     }
+    uint8_t type = buf[0];
+    if (type == 0xFD) {
+        printf("(PING)\n");
+        return;    
+    }
+
     printf("=========================\n");
     printf("RAW message: ");
     for (size_t i = 0; i < len; i++) printf("%02X ", buf[i]);
     printf("\n");
 
-    uint8_t type = buf[0];
+    
     uint16_t msg_id;
     memcpy(&msg_id, &buf[1], 2);
     msg_id = ntohs(msg_id);
@@ -53,7 +87,6 @@ void udp_print_packet(const uint8_t *buf, size_t len) {
         case 0x02: printf("(AUTH)\n"); break;
         case 0x03: printf("(JOIN)\n"); break;
         case 0x04: printf("(MSG)\n"); break;
-        case 0xFD: printf("(PING)\n"); break;
         case 0xFE: printf("(ERR)\n"); break;
         case 0xFF: printf("(BYE)\n"); break;
         default:   printf("(UNKNOWN)\n"); break;

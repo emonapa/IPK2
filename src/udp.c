@@ -15,7 +15,7 @@
     if ((offset) > 0 && (packet)[(offset)-1] != '\0') (packet)[(offset)++] = '\0'; \
 } while (0)
 
-// Debug print macro (enable via -DDEBUG_PRINT)
+// Debug print macro
 static void debug(const char *fmt, ...) {
 #ifdef DEBUG_PRINT
     va_list args;
@@ -25,14 +25,13 @@ static void debug(const char *fmt, ...) {
 #endif
 }
 
-// Generate a new unique MessageID
 uint16_t udp_next_message_id(UdpClient *client) {
     return client->message_id++;
 }
 
-// Initialize the UDP client (socket + settings)
-int udp_client_init(UdpClient *client, const char *server_ip, uint16_t port,
-                    uint16_t timeout_ms, uint8_t max_retries) {
+
+int udp_client_init(UdpClient *client, const char *server_host, uint16_t port,
+    uint16_t timeout_ms, uint8_t max_retries) {
     memset(client, 0, sizeof(UdpClient));
 
     client->sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -44,8 +43,10 @@ int udp_client_init(UdpClient *client, const char *server_ip, uint16_t port,
     memset(&client->server_addr, 0, sizeof(struct sockaddr_in));
     client->server_addr.sin_family = AF_INET;
     client->server_addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, server_ip, &client->server_addr.sin_addr) <= 0) {
-        perror("inet_pton");
+
+    // Přes DNS
+    if (resolve_server_address(server_host, port, &client->server_addr) != 0) {
+        fprintf(stderr, "Failed to resolve server address\n");
         return -1;
     }
 
@@ -58,30 +59,24 @@ int udp_client_init(UdpClient *client, const char *server_ip, uint16_t port,
     return 0;
 }
 
-// Close the UDP socket
+
 void udp_client_close(UdpClient *client) {
     if (client->sockfd > 0)
         close(client->sockfd);
 }
 
-// Send a CNFRM message in response to received message
-int udp_send_confirm(UdpClient *client, uint16_t ref_msg_id, const struct sockaddr_in *target_addr) {
+int udp_send_confirm(UdpClient *client, uint16_t ref_msg_id) {
     uint8_t packet[3];
     packet[0] = MSG_CNFRM;
     uint16_t net_id = htons(ref_msg_id);
     memcpy(&packet[1], &net_id, sizeof(uint16_t));
 
     int sent = sendto(client->sockfd, packet, sizeof(packet), 0,
-                      (struct sockaddr *)target_addr, client->addr_len);
+                      (struct sockaddr *)&client->server_addr, client->addr_len);
     if (sent < 0) {
         perror("sendto (confirm)");
         return -1;
     }
-
-    debug("Sending UDP Packet\n");
-    #ifdef DEBUG_PRINT
-    udp_print_packet(packet, sizeof(packet));
-    #endif
 
     debug("[DEBUG] Sent CNFRM for ID %u\n", ref_msg_id);
     return 0;
@@ -94,19 +89,15 @@ int udp_send_message(UdpClient *client, packetContent_t *content) {
     size_t offset = 0;
 
     packet[offset++] = (uint8_t)content->type;
-
     uint16_t net_id = htons(content->messageID);
     memcpy(&packet[offset], &net_id, sizeof(uint16_t));
     offset += 2;
 
     switch (content->type) {
-        case MSG_CNFRM: {
-            // Overwrite the message ID with the reference ID
-            uint16_t net_ref = htons(content->ref_messageID);
-            memcpy(&packet[1], &net_ref, sizeof(uint16_t));
+        case MSG_CNFRM:
+            memcpy(&packet[1], &net_id, sizeof(uint16_t));
             offset = 3;
             break;
-        }
         case MSG_REPLY: {
             packet[offset++] = content->result;
             uint16_t net_ref = htons(content->ref_messageID);
@@ -176,11 +167,6 @@ int udp_send_message(UdpClient *client, packetContent_t *content) {
 
     if (offset > MAX_MESSAGE_SIZE) return -1;
 
-    debug("Sending UDP Packet\n");
-    #ifdef DEBUG_PRINT
-    udp_print_packet(packet, offset);
-    #endif
-
     ssize_t sent = sendto(client->sockfd, packet, offset, 0,
                           (struct sockaddr *)&client->server_addr, client->addr_len);
     if (sent < 0) {
@@ -190,12 +176,11 @@ int udp_send_message(UdpClient *client, packetContent_t *content) {
 
     return 0;
 }
-
 int udp_receive_message(UdpClient *client, uint8_t *buffer, size_t buffer_size,
-                        UdpMessageType *out_type, uint16_t *out_message_id,
-                        struct sockaddr_in *source_addr) {
-    struct pollfd pfd = { .fd = client->sockfd, .events = POLLIN };
+    UdpMessageType *out_type, uint16_t *out_message_id) {
+    if (!client || !buffer || !out_type || !out_message_id) return -1;
 
+    struct pollfd pfd = { .fd = client->sockfd, .events = POLLIN };
     int ready = poll(&pfd, 1, client->timeout_ms);
 
     if (ready < 0) {
@@ -206,9 +191,11 @@ int udp_receive_message(UdpClient *client, uint8_t *buffer, size_t buffer_size,
         return 0;
     }
 
+    struct sockaddr_in source;
     socklen_t addr_len = sizeof(struct sockaddr_in);
     ssize_t received = recvfrom(client->sockfd, buffer, buffer_size, 0,
-                                (struct sockaddr *)source_addr, &addr_len);
+                (struct sockaddr *)&source, &addr_len);
+
     if (received < 3) {
         debug("[DEBUG] Received too short message: %ld bytes\n", received);
         return -2;
@@ -218,58 +205,61 @@ int udp_receive_message(UdpClient *client, uint8_t *buffer, size_t buffer_size,
     #ifdef DEBUG_PRINT
     udp_print_packet(buffer, received);
     #endif
-    
 
     *out_type = buffer[0];
     uint16_t net_id;
     memcpy(&net_id, &buffer[1], sizeof(uint16_t));
     *out_message_id = ntohs(net_id);
 
+    // Automatické přepnutí portu po AUTH → REPLY
+    if (*out_type == MSG_REPLY) {
+        uint8_t result = buffer[3];
+        const char *msg = (const char *)&buffer[6];
+
+        // Yes, this line is from chatgpt, but I find it so funny that I must keep it.
+        printf(result ? "Action Success: %s\n" : "Action Failure: %s\n", msg);
+        client->server_addr.sin_port = source.sin_port;
+        debug("[DEBUG] Updated server port to %u based on REPLY\n", ntohs(source.sin_port));
+    }
+
     return received;
 }
+
 
 int udp_send_with_confirm(UdpClient *client, packetContent_t *packet) {
     if (!client || !packet) return -1;
 
     uint16_t msg_id = udp_next_message_id(client);
     packet->messageID = msg_id;
-    debug("[DEBUG], WORKING WITH ID %u\n", msg_id);
 
     for (int attempt = 0; attempt <= client->max_retries; ++attempt) {
         if (udp_send_message(client, packet) != 0)
             return -1;
 
-        for (int noBanPls = 5; noBanPls>0; noBanPls--) {
+        for (int wait = 5; wait > 0; --wait) {
             uint8_t buf[MAX_MESSAGE_SIZE];
             UdpMessageType recv_type;
             uint16_t recv_id;
-            struct sockaddr_in source;
 
-            int ret = udp_receive_message(client, buf, sizeof(buf), &recv_type, &recv_id, &source);
+            int ret = udp_receive_message(client, buf, sizeof(buf), &recv_type, &recv_id);
             if (ret == 0) break;
             if (ret < 0) continue;
 
-            if (recv_type == MSG_CNFRM && recv_id == msg_id) {
+            if (recv_type == MSG_CNFRM && recv_id == msg_id)
                 return 0;
-            }
-        
-            // NOVÁ část – kontrola REPLY
+
             if (recv_type == MSG_REPLY && ret >= 6) {
                 uint8_t result = buf[3];
                 uint16_t ref_id;
                 memcpy(&ref_id, &buf[4], 2);
                 ref_id = ntohs(ref_id);
-        
-                printf("ref_id ?= msg_id: %u ?= %u\n", ref_id, msg_id);
-                if (ref_id == msg_id) {
-                    // Optionally parse the message content: &buf[6]
-                    return (result == 1) ? 0 : -2;  // success/fail na základě REPLY
-                }
+                if (ref_id == msg_id)
+                    return (result == 1) ? 0 : -2;
             }
 
             if (!msgid_buffer_contains(&client->seen_ids, recv_id)) {
                 msgid_buffer_add(&client->seen_ids, recv_id);
-                udp_send_confirm(client, recv_id, &source);
+                udp_send_confirm(client, recv_id);
             }
         }
     }
@@ -281,14 +271,14 @@ int udp_send_with_confirm(UdpClient *client, packetContent_t *packet) {
 bool parse_auth_payload(UdpClient *client, const char *args, packetContent_t *out_packet) {
     if (!client || !args || !out_packet) return false;
 
-    static char payload[128];  // static kvůli životnosti mimo funkci
+    static char payload[128];
     size_t offset = 0;
 
     const char *username = args;
     const char *next = strchr(username, ' ');
     if (!next) return false;
     size_t len = next - username;
-    if (len == 0 || len >= sizeof(client->username)) return false;
+    if (len >= sizeof(client->username)) return false;
     strncpy(client->username, username, len);
     client->username[len] = '\0';
 
@@ -296,14 +286,14 @@ bool parse_auth_payload(UdpClient *client, const char *args, packetContent_t *ou
     next = strchr(secret, ' ');
     if (!next) return false;
     len = next - secret;
-    if (len == 0 || len >= 64) return false;
+    if (len >= 64) return false;
     memcpy(&payload[offset], secret, len);
     offset += len;
     payload[offset++] = '\0';
 
     const char *display_name = next + 1;
     len = strlen(display_name);
-    if (len == 0 || len >= sizeof(client->display_name)) return false;
+    if (len >= sizeof(client->display_name)) return false;
     strncpy(client->display_name, display_name, sizeof(client->display_name) - 1);
     client->display_name[sizeof(client->display_name) - 1] = '\0';
 
@@ -313,7 +303,6 @@ bool parse_auth_payload(UdpClient *client, const char *args, packetContent_t *ou
     return true;
 }
 
-// Main client loop
 int udp_run(const client_config_t *cfg) {
     UdpClient client;
     client_state_t state = STATE_INIT;
@@ -392,19 +381,15 @@ int udp_run(const client_config_t *cfg) {
             uint8_t buf[MAX_MESSAGE_SIZE];
             UdpMessageType type;
             uint16_t msg_id;
-            struct sockaddr_in src;
 
-            int ret = udp_receive_message(&client, buf, sizeof(buf), &type, &msg_id, &src);
+            int ret = udp_receive_message(&client, buf, sizeof(buf), &type, &msg_id);
             if (ret <= 0) continue;
 
-            if (msgid_buffer_contains(&client.seen_ids, msg_id)) {
-                continue;
-            }
+            if (msgid_buffer_contains(&client.seen_ids, msg_id)) continue;
 
             msgid_buffer_add(&client.seen_ids, msg_id);
-            if (type != MSG_CNFRM) {
-                udp_send_confirm(&client, msg_id, &src);
-            }
+            if (type != MSG_CNFRM)
+                udp_send_confirm(&client, msg_id);
 
             if (type == MSG_MSG || type == MSG_REPLY) {
                 printf("%s\n", &buf[3]);

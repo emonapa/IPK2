@@ -63,10 +63,9 @@ void udp_client_close(UdpClient *client);
 int udp_send_message(UdpClient *client, packetContent_t *content);
 
 int udp_receive_message(UdpClient *client, uint8_t *buffer, size_t buffer_size,
-                        UdpMessageType *out_type, uint16_t *out_message_id,
-                        struct sockaddr_in *source_addr);
-int udp_send_confirm(UdpClient *client, uint16_t ref_msg_id,
-                     const struct sockaddr_in *target_addr);
+    UdpMessageType *out_type, uint16_t *out_message_id);
+
+int udp_send_confirm(UdpClient *client, uint16_t ref_msg_id);
 
 int udp_send_with_confirm(UdpClient *client, packetContent_t *packet);
 
