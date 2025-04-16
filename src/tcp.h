@@ -23,6 +23,29 @@ typedef struct {
     int replyOk;  // 1 if REPLY OK, 0 if REPLY NOK
 } tcp_message_t;
 
+// Simple client states
+typedef enum {
+    CLIENT_CLOSED,
+    CLIENT_AUTH,
+    CLIENT_OPEN,
+    CLIENT_END
+} client_state_t;
+
+// Holds the TCP client's runtime info
+static struct {
+    int sock;
+    client_state_t state;
+    char displayName[32];
+    char username[32];
+    char secret[128];
+
+    // If set, we are waiting for a REPLY or ERR before next command
+    int waitingForReply;
+    // Buffer for partial lines
+    char lineBuf[8192];
+    int  lineLen;
+} g_tcp;
+
 // Parses a single line from the server. Returns true if successful
 bool tcp_parse_line(const char *line, tcp_message_t *msg);
 

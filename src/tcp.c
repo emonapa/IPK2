@@ -6,33 +6,28 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <poll.h>
+#include <signal.h>
+#include <stdarg.h>
+
 #include "tcp.h"
-#include "utils.h"  // for resolve_hostname_ipv4
+#include "utils.h"  
+#include "client.h" // for resolve_hostname_ipv4
 
-// Simple client states
-typedef enum {
-    CLIENT_CLOSED,
-    CLIENT_AUTH,
-    CLIENT_OPEN,
-    CLIENT_END
-} client_state_t;
+static void debug(const char *fmt, ...) {
+    #ifdef DEBUG_PRINT
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(stderr, fmt, args);
+        va_end(args);
+    #endif
+}
 
-// Holds the TCP client's runtime info
-static struct {
-    int sock;
-    client_state_t state;
-    char displayName[32];
-    char username[32];
-    char secret[128];
+volatile sig_atomic_t terminate_tcp = 0;
 
-    // If set, we are waiting for a REPLY or ERR before next command
-    int waitingForReply;
-    // Buffer for partial lines
-    char lineBuf[8192];
-    int  lineLen;
-} g_tcp;
-
-
+void handle_sigint_tcp(int signo) {
+    (void)signo;
+    terminate_tcp = 1;
+}
 
 bool tcp_parse_line(const char *line, tcp_message_t *msg)
 {
@@ -136,7 +131,6 @@ static void process_server_line(const char *line)
     case TCP_MSG_REPLY:
         if (msg.replyOk) {
             fprintf(stdout, "Action Success: %s\n", msg.content);
-            fprintf(stdout, "State: %d\n", g_tcp.state);
             if (g_tcp.state == CLIENT_CLOSED || g_tcp.state == CLIENT_AUTH)
                 g_tcp.state = CLIENT_OPEN;
         } else {
@@ -223,14 +217,14 @@ static void process_local_command(const char *cmdLine)
     }
     else if (strcmp(tokens[0], "/rename") == 0) {
         if (count < 2) {
-            fprintf(stderr, "Usage: /rename newName\n");
+            debug("Usage: /rename newName\n");
             return;
         }
         strcpy(g_tcp.displayName, tokens[1]);
-        fprintf(stdout, "Renamed locally to: %s\n", g_tcp.displayName);
+        debug("Renamed locally to: %s\n", g_tcp.displayName);
     }
     else {
-        fprintf(stderr, "Unknown command: %s\n", tokens[0]);
+        debug("Unknown command: %s\n", tokens[0]);
     }
 }
 
@@ -243,12 +237,14 @@ int tcp_run(const client_config_t *cfg)
         return 1;
     }
 
+    signal(SIGINT, handle_sigint_tcp);
+
     struct sockaddr_in srv;
     memset(&srv, 0, sizeof(srv));
     srv.sin_family = AF_INET;
     srv.sin_port = htons(cfg->port);
 
-    if (!resolve_server_address(cfg->server, cfg->port, &srv)) {
+    if (resolve_server_address(cfg->server, cfg->port, &srv) != 0) {
         fprintf(stderr, "Failed to resolve server address: %s\n", cfg->server);
         close(g_tcp.sock);
         return 1;
@@ -260,7 +256,7 @@ int tcp_run(const client_config_t *cfg)
         return 1;
     }
 
-    fprintf(stderr, "TCP connected to %s:%d\n", cfg->server, cfg->port);
+    debug("TCP connected to %s:%d\n", cfg->server, cfg->port);
     g_tcp.state = CLIENT_CLOSED;
     strcpy(g_tcp.displayName, "UserTCP");
     g_tcp.waitingForReply = 0;
@@ -273,10 +269,14 @@ int tcp_run(const client_config_t *cfg)
     fds[1].events = POLLIN;
 
 
-    int max_tries = 3;
-    while (g_tcp.state != CLIENT_END && max_tries > 0) {
-        //max_tries--;
+    while (g_tcp.state != CLIENT_END) {
+        if (terminate_tcp) {
+            fprintf(stderr, "Received SIGINT. Exiting...\n");
+            break;
+        }
+
         int ret = poll(fds, 2, -1);
+
         if (ret < 0) {
             if (errno == EINTR) continue;
             perror("poll");
@@ -287,7 +287,7 @@ int tcp_run(const client_config_t *cfg)
             int n = recv(g_tcp.sock, g_tcp.lineBuf + g_tcp.lineLen,
                          sizeof(g_tcp.lineBuf) - g_tcp.lineLen - 1, 0);
             if (n <= 0) {
-                fprintf(stderr, "Server closed or error.\n");
+                debug("Server closed or error.\n");
                 break;
             }
             g_tcp.lineLen += n;
@@ -311,7 +311,7 @@ int tcp_run(const client_config_t *cfg)
         if (fds[1].revents & POLLIN) {
             char inputBuf[1024];
             if (!fgets(inputBuf, sizeof(inputBuf), stdin)) {
-                fprintf(stderr, "EOF on stdin.\n");
+                debug("EOF on stdin.\n");
                 break;
             }
             int l = strlen(inputBuf);

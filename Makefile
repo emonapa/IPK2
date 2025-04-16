@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -O2 -D_POSIX_C_SOURCE=200809L
+CFLAGS = -Wall -Wextra -std=gnu17 -O2 -D_POSIX_C_SOURCE=200809L -DDEBUG_PRINT
 LDLIBS = 
 TARGET = ipk25chat-client
 

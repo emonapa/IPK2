@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "client.h"
+#include "tcp.h"
+#include "udp.h"
 
 #define DEFAULT_PORT 4567
 #define DEFAULT_UDP_TIMEOUT 250 // ms
@@ -54,5 +56,12 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    return client_run(&cfg);
+    if (strcmp(cfg.transport, "tcp") == 0) {
+        return tcp_run(&cfg);
+    } else if (strcmp(cfg.transport, "udp") == 0) {
+        return udp_run(&cfg);
+    } else {
+        fprintf(stderr, "Unsupported transport: %s\n", cfg.transport);
+        return 1;
+    }
 }

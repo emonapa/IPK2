@@ -1,5 +1,6 @@
 #include "udp.h"
 #include "utils.h"
+#include "client.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,8 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <signal.h>
+#include <time.h>
+
 
 #define CHECK_LAST_NULL(packet, offset) do { \
     if ((offset) > 0 && (packet)[(offset)-1] != '\0') (packet)[(offset)++] = '\0'; \
@@ -26,12 +29,12 @@ static void debug(const char *fmt, ...) {
 }
 
 // Globální flag pro ukončení programu
-volatile sig_atomic_t should_exit = 0;
+volatile sig_atomic_t terminate_udp = 0;
 
 // Signal handler pro Ctrl+C
-void handle_sigint(int signum) {
+void handle_sigint_udp(int signum) {
     (void)signum;
-    should_exit = 1;
+    terminate_udp = 1;
 }
 
 uint16_t udp_next_message_id(UdpClient *client) {
@@ -65,10 +68,6 @@ int udp_client_init(UdpClient *client, const char *server_host, uint16_t port,
     msgid_buffer_init(&client->seen_ids);
     return 0;
 }
-
-#include <stdio.h>
-#include <string.h>
-#include <stdint.h>
 
 // Zpracuje a vypíše obsah ERR zprávy ze serveru
 void handle_error_message(const uint8_t *buf, size_t length) {
@@ -247,17 +246,22 @@ int udp_receive_message(UdpClient *client, uint8_t *buffer, size_t buffer_size,
     return ret;
 }
 
+
+
 int udp_send_with_confirm(UdpClient *client, packetContent_t *packet,
                           uint8_t *buf, size_t buf_len) {
     if (!client || !packet || !buf) return -1;
     uint16_t msg_id = udp_next_message_id(client);
     packet->messageID = msg_id;
 
+
     for (int attempt = 0; attempt <= client->max_retries; ++attempt) {
         if (udp_send_message(client, packet) != 0)
             return -1;
 
-        while (1) {
+        struct timespec start = start_timer();
+
+        while (get_elapsed_ms(start) < client->timeout_ms) {
             struct sockaddr_in source;
             int ret = udp_receive_message(client, buf, buf_len, &source);
             if (ret == 0) break;
@@ -270,7 +274,7 @@ int udp_send_with_confirm(UdpClient *client, packetContent_t *packet,
 
             if (type == MSG_ERR && id == msg_id) {
                 handle_error_message(buf, ret);
-                break;
+                return -1;
             }
 
             if (type == MSG_CNFRM && id == msg_id)
@@ -282,25 +286,24 @@ int udp_send_with_confirm(UdpClient *client, packetContent_t *packet,
     return -1;
 }
 
+
 int udp_send_with_reply(UdpClient *client, packetContent_t *packet,
                         uint8_t *buf, size_t buf_len) {
     if (!client || !packet || !buf) return -1;
 
-    uint16_t msg_id = udp_next_message_id(client);
-    packet->messageID = msg_id;
-    int confirmed = 0;
-    // Just for the warning
-    confirmed = confirmed + 0;
+    uint16_t msg_id = client->message_id;
+
+    // Nejprve odeslat a počkat na confirm
+    if (udp_send_with_confirm(client, packet, buf, buf_len) != 0)
+        return -1;
 
     for (int attempt = 0; attempt <= client->max_retries; ++attempt) {
-        if (udp_send_message(client, packet) != 0)
-            return -1;
+        struct timespec start = start_timer();
 
-        while (1) {
+        while (get_elapsed_ms(start) < client->timeout_ms) {
             struct sockaddr_in source;
             int ret = udp_receive_message(client, buf, buf_len, &source);
-            if (ret == 0) break;
-            if (ret < 3) continue;
+            if (ret <= 0) continue;
 
             uint8_t type = buf[0];
             uint16_t id;
@@ -309,27 +312,23 @@ int udp_send_with_reply(UdpClient *client, packetContent_t *packet,
 
             if (type == MSG_ERR && id == msg_id) {
                 handle_error_message(buf, ret);
-                break;
-            }
-
-            if (type == MSG_CNFRM && id == msg_id) {
-                confirmed = 1;
-                continue;
+                return -1;
             }
 
             if (type == MSG_REPLY && ret >= 6) {
                 uint16_t ref_id;
                 memcpy(&ref_id, &buf[4], sizeof(uint16_t));
                 ref_id = ntohs(ref_id);
+
                 if (ref_id == msg_id) {
                     memcpy(&client->dyn_server_addr, &source, sizeof(struct sockaddr_in));
+                    debug("[DEBUG] Updated server port to %u based on REPLY\n", ntohs(source.sin_port));
 
                     if (!msgid_buffer_contains(&client->seen_ids, id)) {
                         msgid_buffer_add(&client->seen_ids, id);
                         udp_send_confirm(client, id);
                     }
 
-                    debug("[DEBUG] Updated server port to %u based on REPLY\n", ntohs(source.sin_port));
                     return 0;
                 }
             }
@@ -341,9 +340,10 @@ int udp_send_with_reply(UdpClient *client, packetContent_t *packet,
         }
     }
 
-    fprintf(stderr, "ERROR: REPLY not received after %d attempts.\n", client->max_retries);
+    fprintf(stderr, "ERROR: REPLY not received after %d ms timeout.\n", client->timeout_ms);
     return -1;
 }
+
 
 bool parse_auth_payload(UdpClient *client, const char *args, packetContent_t *out_packet) {
     if (!client || !args || !out_packet) return false;
@@ -383,7 +383,7 @@ bool parse_auth_payload(UdpClient *client, const char *args, packetContent_t *ou
 int udp_run(const client_config_t *cfg) {
     UdpClient client;
     client_state_t state = STATE_INIT;
-    signal(SIGINT, handle_sigint);
+    signal(SIGINT, handle_sigint_udp);
 
     if (udp_client_init(&client, cfg->server, cfg->port,
                         cfg->udp_confirm_timeout_ms, cfg->udp_max_retries) != 0)
@@ -402,7 +402,7 @@ int udp_run(const client_config_t *cfg) {
     };
 
     while (1) {
-        if (should_exit) {
+        if (terminate_udp) {
             packetContent_t pkt = { .type = MSG_BYE, .payload = NULL, .length = 0 };
             udp_send_with_confirm(&client, &pkt, buffer, sizeof(buffer));
             break;
@@ -417,7 +417,7 @@ int udp_run(const client_config_t *cfg) {
         if (pfds[0].revents & POLLIN) {
             char line[512];
             if (!fgets(line, sizeof(line), stdin)) {
-                should_exit = 1;
+                terminate_udp = 1;
                 continue;
             }
             line[strcspn(line, "\n")] = 0;

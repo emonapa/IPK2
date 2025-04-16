@@ -1,36 +1,7 @@
 #include "utils.h"
-#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <netdb.h>
-
-int resolve_server_address(const char *host, uint16_t port, struct sockaddr_in *out_addr) {
-    struct addrinfo hints, *res;
-    char port_str[6];
-    snprintf(port_str, sizeof(port_str), "%u", port);
-
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; // IPv4
-    hints.ai_socktype = SOCK_DGRAM;
-
-    int err = getaddrinfo(host, port_str, &hints, &res);
-    if (err != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
-        return -1;
-    }
-
-    if (res == NULL) {
-        fprintf(stderr, "No address info found for %s\n", host);
-        return -1;
-    }
-
-    struct sockaddr_in *addr_in = (struct sockaddr_in *)res->ai_addr;
-    memcpy(out_addr, addr_in, sizeof(struct sockaddr_in));
-    freeaddrinfo(res);
-    return 0;
-}
-
 
 
 void msgid_buffer_init(msgid_buffer_t *buf) {

@@ -27,6 +27,5 @@ void msgid_buffer_add(msgid_buffer_t *buf, uint16_t id);
 // Print the contents of a UDP packet
 void udp_print_packet(const uint8_t *buf, size_t len);
 
-int resolve_server_address(const char *host, uint16_t port, struct sockaddr_in *out_addr);
 
 #endif // UTILS_H
