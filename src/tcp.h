@@ -29,12 +29,12 @@ typedef enum {
     CLIENT_AUTH,
     CLIENT_OPEN,
     CLIENT_END
-} client_state_t;
+} client_state_t_tcp;
 
 // Holds the TCP client's runtime info
-static struct {
+typedef struct {
     int sock;
-    client_state_t state;
+    client_state_t_tcp state;
     char displayName[32];
     char username[32];
     char secret[128];
@@ -44,7 +44,7 @@ static struct {
     // Buffer for partial lines
     char lineBuf[8192];
     int  lineLen;
-} g_tcp;
+} tcp_client_t;
 
 // Parses a single line from the server. Returns true if successful
 bool tcp_parse_line(const char *line, tcp_message_t *msg);

@@ -6,7 +6,6 @@
 #include <stddef.h>
 #include <arpa/inet.h>
 
-
 #define MSGID_BUFFER_SIZE 1024
 
 typedef struct {

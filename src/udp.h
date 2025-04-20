@@ -44,7 +44,8 @@ typedef struct {
 typedef enum {
     STATE_INIT,
     STATE_AUTHORIZED
-} client_state_t;
+} client_state_t_udp;
+
 
 // Representation of an outgoing message
 typedef struct {
@@ -70,8 +71,7 @@ int udp_send_confirm(UdpClient *client, uint16_t ref_msg_id);
 
 // Sends a message and waits for CNFRM (no REPLY expected)
 // 'buf' must be a buffer of at least MAX_MESSAGE_SIZE bytes
-int udp_send_with_confirm(UdpClient *client, packetContent_t *packet,
-                          uint8_t *buf, size_t buf_len);
+int udp_send_with_confirm(UdpClient *client, packetContent_t *packet);
 
 // Sends a message and waits for CNFRM and then REPLY
 // On REPLY, the client's dynamic address is updated

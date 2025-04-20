@@ -3,6 +3,8 @@
         "*.embeddedhtml": "html",
         "string.h": "c",
         "stdio.h": "c",
-        "socket.h": "c"
+        "socket.h": "c",
+        "udp.h": "c",
+        "tcp.h": "c"
     }
 }
